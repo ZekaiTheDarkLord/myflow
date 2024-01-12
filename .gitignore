@@ -4,4 +4,6 @@ test
 training
 output
 bundler
-
+__pycache__
+training/.AppleDouble
+datasets
