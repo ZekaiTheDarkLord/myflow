@@ -7,6 +7,8 @@ bundler
 __pycache__
 training/.AppleDouble
 .idea
+flow_code
+script.txt
 datasets
 test.py
 test_2.py
