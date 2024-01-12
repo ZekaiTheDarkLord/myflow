@@ -61,23 +61,27 @@ class CNNEncoder(torch.nn.Module):
         self.block2 = ConvBlock(3, config.feature_dim, kernel_size=7, stride=1, padding=3) # 1/16
         self.block2_dd = DownDimBlock(config.feature_dim * 2, config.feature_dim) # pick features
 
-        # self.self_attn = transformer.FeatureTransformer(config.feature_dim, num_layers=1, bidir=False, swin=False, ffn=True, ffn_dim_expansion=4, post_norm=False)
+        # self.merge_conv_1 = torch.nn.Sequential(torch.nn.Conv2d(config.feature_dim + 2, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False),
+        #                                        torch.nn.LeakyReLU(negative_slope=0.1, inplace=False),
+        #                                        torch.nn.Conv2d(config.feature_dim, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False))
 
-    def init_hw(self, height, width):
+        # self.merge_conv_2 = torch.nn.Sequential(torch.nn.Conv2d(config.feature_dim + 2, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False),
+        #                                        torch.nn.LeakyReLU(negative_slope=0.1, inplace=False),
+        #                                        torch.nn.Conv2d(config.feature_dim, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False))
 
-        self.pos_1_ys, self.pos_1_xs = torch.meshgrid(torch.arange(height), torch.arange(width), indexing='ij')
-        self.pos_1_ys = self.pos_1_ys.cuda()[None,None]
-        self.pos_1_xs = self.pos_1_xs.cuda()[None,None]
-        self.pos_1_ys = self.pos_1_ys / (height-1)
-        self.pos_1_xs = self.pos_1_xs / (width-1)
-        self.pos_1 = torch.cat([self.pos_1_ys, self.pos_1_xs], dim=1)
+        # self.self_attn = transformer.FeatureAttention(config.feature_dim+2, num_layers=1, bidir=False, ffn=True, ffn_dim_expansion=1, post_norm=True)
 
-        self.pos_2_ys, self.pos_2_xs = torch.meshgrid(torch.arange(height//2), torch.arange(width//2), indexing='ij')
-        self.pos_2_ys = self.pos_2_ys.cuda()[None,None]
-        self.pos_2_xs = self.pos_2_xs.cuda()[None,None]
-        self.pos_2_ys = self.pos_2_ys / (height//2-1)
-        self.pos_2_xs = self.pos_2_xs / (width//2-1)
-        self.pos_2 = torch.cat([self.pos_2_ys, self.pos_2_xs], dim=1)
+    def init_pos(self, batch_size, height, width):
+
+        ys, xs = torch.meshgrid(torch.arange(height), torch.arange(width), indexing='ij')
+        ys = ys.cuda() / (height-1)
+        xs = xs.cuda() / (width-1)
+        pos = torch.stack([ys, xs])
+        return pos[None].repeat(batch_size,1,1,1)
+
+    def init_pos_12(self, batch_size, height, width):
+        self.pos_1 = self.init_pos(batch_size, height, width)
+        self.pos_2 = self.init_pos(batch_size, height//2, width//2)
 
     def forward(self, img):
 
@@ -109,12 +113,9 @@ class CNNEncoder(torch.nn.Module):
         x2 = torch.cat([self.block1_ds(x1), x2], dim=1)
         x2 = self.block2_dd(x2)
 
-        # x1 = x1 + self.pos_1
-        # x2 = x2 + self.pos_2
+        x1 = torch.cat([x1, self.pos_1], dim=1)
+        x2 = torch.cat([x2, self.pos_2], dim=1)
 
-        x1 = torch.cat([x1, self.pos_1.repeat(b,1,1,1)], dim=1)
-        x2 = torch.cat([x2, self.pos_2.repeat(b,1,1,1)], dim=1)
-
-        # # x2 = self.self_attn(x2, x2)
+        # x2 = self.self_attn(x2, x2)
 
         return [x1, x2]

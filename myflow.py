@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import backbone
 import transformer
 import matching
-import up_sampler_2
+import up_sampler
 import utils
 
 import config
@@ -15,82 +15,69 @@ class GMFlow(torch.nn.Module):
     def __init__(self):
         super(GMFlow, self).__init__()
         self.backbone = backbone.CNNEncoder()
-        self.cross_attn_2 = transformer.FeatureTransformer(config.feature_dim+2, num_layers=1, bidir=True, ffn=True, ffn_dim_expansion=4, post_norm=True)
-        self.cross_attn_2_2 = transformer.FeatureTransformer(config.feature_dim+4, num_layers=2, bidir=True, ffn=True, ffn_dim_expansion=4, post_norm=True)
+        self.cross_attn_s2 = transformer.FeatureAttention(config.feature_dim+2, num_layers=3, bidir=True, ffn=True, ffn_dim_expansion=1, post_norm=True)
         
-        self.feature_flow_attn = transformer.FeatureFlowAttention(config.feature_dim+6)
+        self.matching_s2 = matching.Matching()
+
+        self.flow_attn_s2 = transformer.FlowAttention(config.feature_dim+2)
 
         # torch.nn.ConvTranspose2d(config.feature_dim+2, config.feature_dim+2, kernel_size=2, stride=1, bias=True)
 
-        self.merge_conv = torch.nn.Sequential(torch.nn.Conv2d((config.feature_dim+2)*2+6, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False),
-                                              torch.nn.LeakyReLU(negative_slope=0.1, inplace=False))
+        self.merge_conv = torch.nn.Sequential(torch.nn.Conv2d((config.feature_dim+2) * 2, config.feature_dim * 2, kernel_size=3, stride=1, padding=1, bias=False),
+                                              torch.nn.GELU(),
+                                              torch.nn.Conv2d(config.feature_dim * 2, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False))
 
-        self.up_sampler = up_sampler_2.UpSampler(config.feature_dim, patch_size=7)
+        self.fine_up_sampler = up_sampler.Fine(config.feature_dim, patch_size=7)
 
-    def init_hw(self, height, width):
-        self.backbone.init_hw(height, width)
-        # self.up_sampler.init_hw(height, width)
+        for p in self.parameters():
+            if p.dim() > 1:
+                torch.nn.init.xavier_uniform_(p)
 
-    def forward(self, img_0, img_1):
+    def init_hw(self, batch_size, height, width):
+        self.backbone.init_pos_12(batch_size, height, width)
+        self.matching_s2.init_grid(batch_size, height//2, width//2)
+
+    def forward(self, img0, img1):
 
         flow_list = []
 
-        img_0 = utils.normalize_img(img_0)
-        img_1 = utils.normalize_img(img_1)
+        img0 = utils.normalize_img(img0)
+        img1 = utils.normalize_img(img1)
 
-        feature_0_list = self.backbone(img_0)
+        feature0_list = self.backbone(img0)
         # torch.cuda.synchronize()
         # start_time = time.time()
-        feature_1_list = self.backbone(img_1)
+        feature1_list = self.backbone(img1)
         # torch.cuda.synchronize()
         # end_time = time.time()
         # print('backbone:', end_time-start_time)
 
-        feature_0_1, feature_0_2 = feature_0_list
-        feature_1_1, feature_1_2 = feature_1_list
+        feature0_s1, feature0_s2 = feature0_list
+        feature1_s1, feature1_s2 = feature1_list
 
-        feature_0_2, feature_1_2 = self.cross_attn_2(feature_0_2, feature_1_2)
-        flow = matching.global_correlation_softmax(feature_0_2, feature_1_2, bw_flow=True)
-        flow_0, flow_1 = flow.chunk(chunks=2, dim=0)
+        feature0_s2, feature1_s2 = self.cross_attn_s2(feature0_s2, feature1_s2)
+        flow0 = self.matching_s2.global_correlation_softmax(feature0_s2, feature1_s2)
+        flow_list.append(flow0)
 
-        feature_0_2 = torch.cat([feature_0_2, flow_0], dim=1)
-        feature_1_2 = torch.cat([feature_1_2, flow_1], dim=1)
+        flow0 = self.flow_attn_s2(feature0_s2, flow0)
+        flow_list.append(flow0)
 
-        feature_0_2, feature_1_2 = self.cross_attn_2_2(feature_0_2, feature_1_2)
-        flow = matching.global_correlation_softmax(feature_0_2, feature_1_2, bw_flow=True)
-        flow_0, flow_1 = flow.chunk(chunks=2, dim=0)
-        
-        feature_0_2 = torch.cat([feature_0_2, flow_0], dim=1)
-        feature_1_2 = torch.cat([feature_1_2, flow_1], dim=1)
+        feature0_s2 = F.interpolate(feature0_s2, scale_factor=2, mode='nearest')
+        feature1_s2 = F.interpolate(feature1_s2, scale_factor=2, mode='nearest')
 
-        flow_list.append(flow_0)
-        feature_0_2, feature_1_2, flow_0, flow_1 = self.feature_flow_attn(feature_0_2, feature_1_2, flow)
-        flow_list.append(flow_0)
+        # feature0_s1.zero_()
+        # feature1_s1.zero_()
 
-        warped_flow_1 = utils.flow_warp(flow_1, flow_0)
+        feature0_s1 = self.merge_conv(torch.cat([feature0_s1, feature0_s2], dim=1))
+        feature1_s1 = self.merge_conv(torch.cat([feature1_s1, feature1_s2], dim=1))
 
-        feature_0_2 = torch.cat([feature_0_2, flow_0], dim=1)
-        feature_1_2 = torch.cat([feature_1_2, flow_1], dim=1)
+        flow0 = F.interpolate(flow0, scale_factor=2, mode='nearest') * 2
 
-        feature_0_2 = F.interpolate(feature_0_2, scale_factor=2, mode='nearest')
-        feature_1_2 = F.interpolate(feature_1_2, scale_factor=2, mode='nearest')
+        feature1_s1 = utils.flow_warp(feature1_s1, flow0)
 
-        # feature_0_1.zero_()
-        # feature_1_1.zero_()
+        delta_flow = self.fine_up_sampler(feature0_s1, feature1_s1, flow0)
+        flow0 = flow0 + delta_flow
 
-        feature_0_1 = self.merge_conv(torch.cat([feature_0_1, feature_0_2], dim=1))
-        feature_1_1 = self.merge_conv(torch.cat([feature_1_1, feature_1_2], dim=1))
-
-        flow_0 = F.interpolate(flow_0, scale_factor=2, mode='nearest') * 2
-        flow_1 = F.interpolate(flow_1, scale_factor=2, mode='nearest') * 2
-
-        feature_1_1 = utils.flow_warp(feature_1_1, flow_0)
-
-        warped_flow_1 = F.interpolate(warped_flow_1, scale_factor=2, mode='nearest') * 2
-
-        delta_flow = self.up_sampler(feature_0_1, feature_1_1, flow_0, warped_flow_1)
-        flow_0 = flow_0 + delta_flow
-
-        flow_list.append(flow_0)
+        flow_list.append(flow0)
 
         return flow_list

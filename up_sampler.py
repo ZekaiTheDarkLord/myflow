@@ -2,16 +2,27 @@ import torch
 import torch.nn.functional as F
 from spatial_correlation_sampler import SpatialCorrelationSampler
 
+# class Coarse(torch.nn.Module):
+#     def __init__(self, feature_dim, upsample_factor):
+#         super(Coarse, self).__init__()
 
-class UpSampler(torch.nn.Module):
+#         self.conv1 = torch.nn.Conv2d(feature_dim + 2, 64, kernel_size=3, stride=1, padding=1),
+#         self.relu = torch.nn.GELU()
+#         self.conv2 = torch.nn.Conv2d(64, upsample_factor ** 2 * 9, kernel_size=3, stride=1, padding=1)
+
+#     def forward(self, feature_0, feature_1, flow_0, flow_1):
+
+#         return self.conv7(x)
+
+class Fine(torch.nn.Module):
     def __init__(self, feature_dim, patch_size):
-        super(UpSampler, self).__init__()
+        super(Fine, self).__init__()
 
         self.patch_size = patch_size
 
         self.correlation_sampler = SpatialCorrelationSampler(kernel_size=1, patch_size=patch_size, stride=1, padding=0, dilation=1)
 
-        self.conv1 = torch.nn.Conv2d(in_channels=patch_size**2+feature_dim+4, out_channels=96, kernel_size=3, stride=1, padding=1)
+        self.conv1 = torch.nn.Conv2d(in_channels=patch_size**2+feature_dim+2, out_channels=96, kernel_size=3, stride=1, padding=1)
         
         self.conv2 = torch.nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1)
         self.conv3 = torch.nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1)
@@ -23,18 +34,14 @@ class UpSampler(torch.nn.Module):
 
         self.relu = torch.nn.LeakyReLU(negative_slope=0.1, inplace=False)
 
-        for p in self.parameters():
-            if p.dim() > 1:
-                torch.nn.init.xavier_uniform_(p)
-
-    def forward(self, feature_0, feature_1, flow_0, warped_flow_1):
+    def forward(self, feature_0, feature_1, flow_0):
 
         b, c, h, w = feature_0.shape
 
         attn = self.correlation_sampler(feature_0, feature_1).view(b, -1, h, w)
-        attn = F.softmax(attn, dim=1)
+        # attn = F.softmax(attn, dim=1)
 
-        x = torch.cat([attn, feature_0, flow_0, warped_flow_1], dim=1)
+        x = torch.cat([attn, feature_0, flow_0], dim=1)
 
         x = self.relu(self.conv1(x))
 

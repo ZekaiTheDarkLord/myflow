@@ -1,14 +1,10 @@
-import numpy as np
 import torch
 import torch.nn.functional as F
-import tensorflow as tf
 
 from config import *
 
-
 def normalize_img(img):
     return (img / 255. - mean) / std
-
 
 def split_feature(feature, num_splits=2, channel_last=False):
     if channel_last:  # [B, H, W, C]
@@ -34,7 +30,6 @@ def split_feature(feature, num_splits=2, channel_last=False):
 
     return feature
 
-
 def merge_splits(splits, num_splits=2, channel_last=False):
     if channel_last:  # [B*K*K, H/K, W/K, C]
         b, h, w, c = splits.size()
@@ -53,7 +48,6 @@ def merge_splits(splits, num_splits=2, channel_last=False):
 
     return merge
 
-
 def coords_grid(b, h, w):
     ys, xs = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')  # [H, W]
 
@@ -65,7 +59,6 @@ def coords_grid(b, h, w):
 
     return grid
 
-
 def generate_window_grid(h_min, h_max, w_min, w_max, len_h, len_w, device=None):
     assert device is not None
 
@@ -76,14 +69,13 @@ def generate_window_grid(h_min, h_max, w_min, w_max, len_h, len_w, device=None):
 
     return grid
 
-
 def normalize_coords(coords, h, w):
     # coords: [B, H, W, 2]
     c = torch.Tensor([(w - 1) / 2., (h - 1) / 2.]).float().to(coords.device)
     return (coords - c) / c  # [-1, 1]
 
-
 def bilinear_sample(img, sample_coords):
+
     b, _, h, w = sample_coords.shape
 
     # Normalize to [-1, 1]
@@ -92,43 +84,18 @@ def bilinear_sample(img, sample_coords):
 
     grid = torch.stack([x_grid, y_grid], dim=-1)  # [B, H, W, 2]
 
-    img = F.grid_sample(img, grid, mode='bilinear', padding_mode='border', align_corners=True)
+    img = F.grid_sample(img, grid, mode='bilinear', padding_mode='zeros', align_corners=True)
 
     return img
 
 
 def flow_warp(feature, flow):
+
     b, c, h, w = feature.size()
 
     grid = coords_grid(b, h, w).to(flow.device) + flow  # [B, 2, H, W]
 
     return bilinear_sample(feature, grid)
-
-
-def torch_get_pixel_value(image, x, y):
-    b, c, h, w = image.size()
-    batch_idx = np.arange(0, b)
-    batch_idx = batch_idx.reshape()
-
-
-
-
-def flow_warp_modified(feature, flow):
-    b, c, h, w = feature.size()
-    max_x = w - 1
-    max_y = h - 1
-
-    x = flow[:, :, :, 0]
-    y = flow[:, :, :, 1]
-    x0 = x
-    y0 = y
-    x1 = x + 1
-    y1 = y + 1
-
-    x0 = x0.clamp(0, max_x)
-    x1 = x1.clamp(0, max_x)
-    y0 = y0.clamp(0, max_y)
-    y1 = y1.clamp(0, max_y)
 
 
 def forward_backward_consistency_check(fwd_flow, bwd_flow,
@@ -154,7 +121,6 @@ def forward_backward_consistency_check(fwd_flow, bwd_flow,
 
     return fwd_occ, bwd_occ
 
-
 def get_occ(fwd_flow, bwd_flow, alpha=0.01, beta=0.5):
     # fwd_flow, bwd_flow: [B, 2, H, W]
     # alpha and beta values are following UnFlow (https://arxiv.org/abs/1711.07837)
@@ -170,22 +136,3 @@ def get_occ(fwd_flow, bwd_flow, alpha=0.01, beta=0.5):
     # fwd_occ = (diff_fwd > threshold).float()  # [B, H, W]
 
     return diff_fwd
-
-
-def pytorch_tensor_to_tensorflow(pytorch_tensor):
-    """
-    Convert a PyTorch tensor to a TensorFlow tensor.
-
-    Args:
-    pytorch_tensor (torch.Tensor): A PyTorch tensor.
-
-    Returns:
-    tensorflow.Tensor: A TensorFlow tensor.
-    """
-    # Ensure the PyTorch tensor is on CPU and convert to NumPy
-    numpy_array = pytorch_tensor.cpu().numpy()
-
-    # Convert the NumPy array to a TensorFlow tensor
-    tensorflow_tensor = tf.convert_to_tensor(numpy_array)
-
-    return tensorflow_tensor
