@@ -6,6 +6,8 @@ output
 bundler
 __pycache__
 training/.AppleDouble
+.idea
+datasets
 test.py
 test_2.py
 test_3.py
