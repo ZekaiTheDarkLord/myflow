@@ -55,7 +55,6 @@ class TransformerLayer(torch.nn.Module):
             message = self.norm2(message)
 
         return source + message
-        # return message
 
 class FeatureAttention(torch.nn.Module):
     def __init__(self, feature_dim, num_layers, bidir=True, ffn=True, ffn_dim_expansion=1, post_norm=False):

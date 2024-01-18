@@ -71,17 +71,17 @@ class CNNEncoder(torch.nn.Module):
 
         # self.self_attn = transformer.FeatureAttention(config.feature_dim+2, num_layers=1, bidir=False, ffn=True, ffn_dim_expansion=1, post_norm=True)
 
-    def init_pos(self, batch_size, height, width):
+    def init_pos(self, batch_size, height, width, device):
 
         ys, xs = torch.meshgrid(torch.arange(height), torch.arange(width), indexing='ij')
-        ys = ys.cuda() / (height-1)
-        xs = xs.cuda() / (width-1)
+        ys = ys.to(device) / (height-1)
+        xs = xs.to(device) / (width-1)
         pos = torch.stack([ys, xs])
         return pos[None].repeat(batch_size,1,1,1)
 
-    def init_pos_12(self, batch_size, height, width):
-        self.pos_1 = self.init_pos(batch_size, height, width)
-        self.pos_2 = self.init_pos(batch_size, height//2, width//2)
+    def init_pos_12(self, batch_size, height, width, device):
+        self.pos_1 = self.init_pos(batch_size, height, width, device)
+        self.pos_2 = self.init_pos(batch_size, height//2, width//2, device)
 
     def forward(self, img):
 

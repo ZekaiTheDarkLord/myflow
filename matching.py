@@ -10,8 +10,8 @@ class Matching:
     def __init__(self, bw_flow=False):
         self.bw_flow = bw_flow
 
-    def init_grid(self, batch_size, height, width):
-        self.grid = utils.coords_grid(batch_size, height, width).to('cuda')  # [B, 2, H, W]
+    def init_grid(self, batch_size, height, width, device):
+        self.grid = utils.coords_grid(batch_size, height, width).to(device)  # [B, 2, H, W]
         self.flatten_grid = self.grid.view(batch_size, 2, -1).permute(0, 2, 1)  # [B, H*W, 2]
 
         # if bw_flow:
