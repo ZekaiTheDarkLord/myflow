@@ -2,9 +2,12 @@ import torch
 import torch.nn.functional as F
 
 from config import *
+from torch_warp import torch_warp
+
 
 def normalize_img(img):
     return (img / 255. - mean) / std
+
 
 def split_feature(feature, num_splits=2, channel_last=False):
     if channel_last:  # [B, H, W, C]
@@ -30,6 +33,7 @@ def split_feature(feature, num_splits=2, channel_last=False):
 
     return feature
 
+
 def merge_splits(splits, num_splits=2, channel_last=False):
     if channel_last:  # [B*K*K, H/K, W/K, C]
         b, h, w, c = splits.size()
@@ -48,6 +52,7 @@ def merge_splits(splits, num_splits=2, channel_last=False):
 
     return merge
 
+
 def coords_grid(b, h, w):
     ys, xs = torch.meshgrid(torch.arange(h), torch.arange(w), indexing='ij')  # [H, W]
 
@@ -59,6 +64,7 @@ def coords_grid(b, h, w):
 
     return grid
 
+
 def generate_window_grid(h_min, h_max, w_min, w_max, len_h, len_w, device=None):
     assert device is not None
 
@@ -69,13 +75,14 @@ def generate_window_grid(h_min, h_max, w_min, w_max, len_h, len_w, device=None):
 
     return grid
 
+
 def normalize_coords(coords, h, w):
     # coords: [B, H, W, 2]
     c = torch.Tensor([(w - 1) / 2., (h - 1) / 2.]).float().to(coords.device)
     return (coords - c) / c  # [-1, 1]
 
-def bilinear_sample(img, sample_coords):
 
+def bilinear_sample(img, sample_coords):
     b, _, h, w = sample_coords.shape
 
     # Normalize to [-1, 1]
@@ -90,7 +97,6 @@ def bilinear_sample(img, sample_coords):
 
 
 def flow_warp(feature, flow):
-
     b, c, h, w = feature.size()
 
     grid = coords_grid(b, h, w).to(flow.device) + flow  # [B, 2, H, W]
@@ -121,6 +127,7 @@ def forward_backward_consistency_check(fwd_flow, bwd_flow,
 
     return fwd_occ, bwd_occ
 
+
 def get_occ(fwd_flow, bwd_flow, alpha=0.01, beta=0.5):
     # fwd_flow, bwd_flow: [B, 2, H, W]
     # alpha and beta values are following UnFlow (https://arxiv.org/abs/1711.07837)
@@ -136,3 +143,33 @@ def get_occ(fwd_flow, bwd_flow, alpha=0.01, beta=0.5):
     # fwd_occ = (diff_fwd > threshold).float()  # [B, H, W]
 
     return diff_fwd
+
+
+def length_sq(x):
+    return torch.sum(x ** 2, dim=3, keepdim=True)
+
+
+def occlusion_torch(flow_fw, flow_bw):
+    H = flow_fw.shape[2]
+    W = flow_fw.shape[3]
+
+    # Assuming torch_warp is a PyTorch equivalent of tf_warp
+    flow_bw_warped = torch_warp(flow_bw, flow_fw, H, W)
+    flow_fw_warped = torch_warp(flow_fw, flow_bw, H, W)
+
+    flow_fw = flow_fw.permute(0, 2, 3, 1)
+    flow_bw = flow_bw.permute(0, 2, 3, 1)
+
+    flow_diff_fw = flow_fw + flow_bw_warped
+    flow_diff_bw = flow_bw + flow_fw_warped
+
+    mag_sq_fw = length_sq(flow_fw) + length_sq(flow_bw_warped)
+    mag_sq_bw = length_sq(flow_bw) + length_sq(flow_fw_warped)
+
+    occ_thresh_fw = 0.01 * mag_sq_fw + 0.5
+    occ_thresh_bw = 0.01 * mag_sq_bw + 0.5
+
+    occ_fw = (length_sq(flow_diff_fw) > occ_thresh_fw).float().permute(0, 3, 1, 2)
+    occ_bw = (length_sq(flow_diff_bw) > occ_thresh_bw).float().permute(0, 3, 1, 2)
+
+    return occ_fw, occ_bw
