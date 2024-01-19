@@ -1,9 +1,16 @@
 import torch
 import torch.nn.functional as F
 
-from config import *
 from torch_warp import torch_warp
 
+mean = None
+std = None
+
+def init_mean_std(device):
+    global mean
+    global std
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1).to(device)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1).to(device)
 
 def normalize_img(img):
     return (img / 255. - mean) / std

@@ -4,38 +4,41 @@ import torch.nn.functional as F
 import backbone
 import transformer
 import matching
-import up_sampler
+import refine
 import utils
 
 import config
 import time
 
 
-class GMFlow(torch.nn.Module):
+class MyFlow(torch.nn.Module):
     def __init__(self):
-        super(GMFlow, self).__init__()
+        super(MyFlow, self).__init__()
         self.backbone = backbone.CNNEncoder()
-        self.cross_attn_s2 = transformer.FeatureAttention(config.feature_dim+2, num_layers=3, bidir=True, ffn=True, ffn_dim_expansion=1, post_norm=True)
+        self.cross_attn_s2 = transformer.FeatureAttention(config.feature_dim+2, num_layers=2, bidir=True, ffn=True, ffn_dim_expansion=1, post_norm=True)
         
         self.matching_s2 = matching.Matching()
 
         self.flow_attn_s2 = transformer.FlowAttention(config.feature_dim+2)
 
-        # torch.nn.ConvTranspose2d(config.feature_dim+2, config.feature_dim+2, kernel_size=2, stride=1, bias=True)
+        # self.feature_interp_conv = torch.nn.ConvTranspose2d(config.feature_dim+2, config.feature_dim+2, kernel_size=4, stride=2, padding=1, bias=True)
 
         self.merge_conv = torch.nn.Sequential(torch.nn.Conv2d((config.feature_dim+2) * 2, config.feature_dim * 2, kernel_size=3, stride=1, padding=1, bias=False),
                                               torch.nn.GELU(),
                                               torch.nn.Conv2d(config.feature_dim * 2, config.feature_dim, kernel_size=3, stride=1, padding=1, bias=False))
 
-        self.fine_up_sampler = up_sampler.Fine(config.feature_dim, patch_size=7)
+        # self.flow_interp_conv = torch.nn.ConvTranspose2d(2, 2, kernel_size=4, stride=2, padding=1, bias=True)
+
+        self.refine_s1 = refine.Refine(config.feature_dim, patch_size=7, num_layers=6)
 
         for p in self.parameters():
             if p.dim() > 1:
                 torch.nn.init.xavier_uniform_(p)
 
-    def init_hw(self, batch_size, height, width):
-        self.backbone.init_pos_12(batch_size, height, width)
-        self.matching_s2.init_grid(batch_size, height//2, width//2)
+    def init_bhw(self, batch_size, height, width, device):
+        self.backbone.init_pos_12(batch_size, height//8, width//8, device)
+        self.matching_s2.init_grid(batch_size, height//16, width//16, device)
+        utils.init_mean_std(device)
 
     def forward(self, img0, img1):
 
@@ -57,16 +60,12 @@ class GMFlow(torch.nn.Module):
 
         feature0_s2, feature1_s2 = self.cross_attn_s2(feature0_s2, feature1_s2)
         flow0 = self.matching_s2.global_correlation_softmax(feature0_s2, feature1_s2)
-        flow_list.append(flow0)
 
         flow0 = self.flow_attn_s2(feature0_s2, flow0)
         flow_list.append(flow0)
 
         feature0_s2 = F.interpolate(feature0_s2, scale_factor=2, mode='nearest')
         feature1_s2 = F.interpolate(feature1_s2, scale_factor=2, mode='nearest')
-
-        # feature0_s1.zero_()
-        # feature1_s1.zero_()
 
         feature0_s1 = self.merge_conv(torch.cat([feature0_s1, feature0_s2], dim=1))
         feature1_s1 = self.merge_conv(torch.cat([feature1_s1, feature1_s2], dim=1))
@@ -75,7 +74,7 @@ class GMFlow(torch.nn.Module):
 
         feature1_s1 = utils.flow_warp(feature1_s1, flow0)
 
-        delta_flow = self.fine_up_sampler(feature0_s1, feature1_s1, flow0)
+        delta_flow = self.refine_s1(feature0_s1, feature1_s1, flow0)
         flow0 = flow0 + delta_flow
 
         flow_list.append(flow0)
